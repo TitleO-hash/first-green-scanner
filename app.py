@@ -69,33 +69,28 @@ html, body, [class*="css"] { font-family: 'Kanit', sans-serif; }
 # ══════════════════════════════════════════════════════════════
 st.markdown("""
 <div class="title-box">
-    <h1>🟢 THREE CAP — First Green Candle Scanner</h1>
-    <p>สแกนหา "เขียวแท่งแรก" พร้อม Volume พิเศษ | THREE CAP © 2026</p>
+    <h1>🟢 VITALi — First Green Candle Scanner</h1>
+    <p>สแกนหา "เขียวแท่งแรก" พร้อม Volume พิเศษ | VITALi © 2026</p>
 </div>
 """, unsafe_allow_html=True)
 
 # ══════════════════════════════════════════════════════════════
 # PRESET LISTS
 # ══════════════════════════════════════════════════════════════
-SET100_STOCKS = [
-    "PTT.BK","PTTEP.BK","PTTGC.BK","AOT.BK","CPALL.BK","CP.BK","SCC.BK",
-    "KBANK.BK","SCB.BK","BBL.BK","KTB.BK","BAY.BK","BDMS.BK","BH.BK",
-    "DELTA.BK","ADVANC.BK","INTUCH.BK","TRUE.BK","GULF.BK","GPSC.BK",
-    "EGCO.BK","RATCH.BK","CPN.BK","LH.BK","MINT.BK","CENTEL.BK","IVL.BK",
-    "TU.BK","TIDLOR.BK","MTC.BK","SAWAD.BK","SPALI.BK","AP.BK","LPN.BK",
-    "QH.BK","HANA.BK","KCE.BK","SVI.BK","GFPT.BK","TFMAMA.BK","OSP.BK",
-    "CBG.BK","OISHI.BK","M.BK","MAJOR.BK","RS.BK","WORK.BK","JMT.BK",
-    "CHAYO.BK","STGT.BK","AAV.BK","BA.BK","WHA.BK","AMATA.BK","TPIPL.BK",
-    "XO.BK","KGEN.BK","NOBLE.BK","ERW.BK",
-]
+@st.cache_data
+def load_stock_list(filename):
+    """อ่านรายชื่อหุ้นจาก CSV (1 คอลัมน์ ไม่มี header)"""
+    try:
+        df = pd.read_csv(filename, header=None)
+        return df.iloc[:, 0].dropna().str.strip().str.upper().tolist()
+    except Exception as e:
+        st.warning(f"⚠️ โหลด {filename} ไม่ได้: {e}")
+        return []
 
-SP500_STOCKS = [
-    "AAPL","MSFT","NVDA","AMZN","GOOGL","META","TSLA","BRK-B","JPM","V",
-    "UNH","XOM","JNJ","WMT","MA","PG","HD","CVX","MRK","LLY",
-    "ABBV","PEP","KO","AVGO","COST","TMO","MCD","ACN","ABT","DHR",
-    "NEE","TXN","HON","PM","UPS","QCOM","IBM","AMGN","CAT","GS",
-    "INTU","SPGI","ISRG","BLK","AXP","LOW","DE","SBUX","ELV","MDT",
-]
+SET_STOCKS    = load_stock_list("SET.csv")
+SET100_STOCKS = load_stock_list("SET100.csv")
+SP500_STOCKS  = load_stock_list("SP500.csv")
+US_STOCKS     = load_stock_list("US_Stock.csv")
 
 # ══════════════════════════════════════════════════════════════
 # SIDEBAR — CONFIG
@@ -114,17 +109,25 @@ with st.sidebar:
 
     stock_source = st.radio(
         "เลือกรายชื่อหุ้น",
-        ["SET100", "S&P500", "พิมพ์เอง", "อัปโหลด CSV"]
+        ["SET", "SET100", "S&P500", "US Stock", "พิมพ์เอง", "อัปโหลด CSV"]
     )
 
     stock_list = []
 
-    if stock_source == "SET100":
+    if stock_source == "SET":
+        stock_list = SET_STOCKS
+        st.caption(f"✅ {len(stock_list)} ตัว")
+
+    elif stock_source == "SET100":
         stock_list = SET100_STOCKS
         st.caption(f"✅ {len(stock_list)} ตัว")
 
     elif stock_source == "S&P500":
         stock_list = SP500_STOCKS
+        st.caption(f"✅ {len(stock_list)} ตัว")
+
+    elif stock_source == "US Stock":
+        stock_list = US_STOCKS
         st.caption(f"✅ {len(stock_list)} ตัว")
 
     elif stock_source == "พิมพ์เอง":
@@ -380,6 +383,7 @@ if "signals" in st.session_state and st.session_state["signals"] is not None:
         st.info("ℹ️ ไม่พบสัญญาณในช่วงที่กำหนด ลองเพิ่ม lookback หรือลด threshold ดูครับ")
     else:
         df_result = pd.DataFrame(signals).sort_values("Date", ascending=False).reset_index(drop=True)
+        df_result.index = df_result.index + 1
 
         # --- ตารางผลลัพธ์ ---
         st.markdown("### 📋 ผลการสแกน")
