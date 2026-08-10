@@ -98,7 +98,7 @@ US_STOCKS     = load_stock_list("US_Stock.csv")
 with st.sidebar:
     st.markdown("### ⚙️ ตั้งค่าการสแกน")
 
-    lookback = st.slider("ดูย้อนหลัง (วัน)", 1, 30, 5)
+    lookback = st.slider("ดูย้อนหลัง (แท่งเทรดล่าสุด)", 1, 30, 5)
     change_th = st.slider("บวก >= (%)", 5, 20, 10)
     vol_mult  = st.slider("Volume >= (x เท่า)", 1.0, 10.0, 3.0, step=0.5)
     quiet_days = st.slider("Quiet period (วัน)", 10, 60, 30)
@@ -157,6 +157,33 @@ with st.sidebar:
 # CORE FUNCTIONS
 # ══════════════════════════════════════════════════════════════
 
+# ══════════════════════════════════════════════════════════════
+# TRADING VALUE — market detection + liquidity threshold
+# ══════════════════════════════════════════════════════════════
+# เกณฑ์เส้นแบ่งสภาพคล่องต่อวัน แยกตามตลาด (ไม่ใช้ตัด/กรองทิ้ง
+# แค่ใช้ทำเครื่องหมายเตือนในตาราง เพราะสกุลเงินคนละหน่วยเทียบตรงๆ ไม่ได้)
+MARKET_CONFIG = {
+    "TH": {"suffix": ".BK", "currency": "THB", "threshold": 50_000_000},
+    "HK": {"suffix": ".HK", "currency": "HKD", "threshold": 20_000_000},
+    "US": {"suffix": "",    "currency": "USD", "threshold": 5_000_000},
+}
+
+def get_market(symbol):
+    if symbol.endswith(".BK"):
+        return "TH"
+    elif symbol.endswith(".HK"):
+        return "HK"
+    else:
+        return "US"
+
+
+def fmt_trading_value(value, currency):
+    """แปลง Trading Value เป็นข้อความ M พร้อมสกุลเงิน"""
+    if value >= 1_000_000_000:
+        return f"{value/1_000_000_000:,.2f}B {currency}"
+    return f"{value/1_000_000:,.1f}M {currency}"
+
+
 def is_quiet_before(df_full, current_iloc, quiet_days, quiet_threshold):
     start_i = max(0, current_iloc - quiet_days)
     prior   = df_full.iloc[start_i:current_iloc]
@@ -188,8 +215,9 @@ def scan_one_stock(symbol, config):
         df['Chg_OC']   = (df['Close'] - df['Open']) / df['Open']
         df['Vol_Ratio'] = df['Volume'] / df['Vol_MA']
 
-        cutoff  = end - timedelta(days=config["lookback_days"])
-        df_scan = df[df.index >= pd.Timestamp(cutoff)]
+        # ใช้ .tail() นับเป็น "แท่งเทรดจริง" ล่าสุด ไม่ใช่นับตามวันปฏิทิน
+        # (กันปัญหาวันหยุด/เสาร์-อาทิตย์ ทำให้ได้แท่งน้อยกว่าที่ตั้งไว้)
+        df_scan = df.tail(config["lookback_days"])
 
         for dt, row in df_scan.iterrows():
             if not (row['Close'] > row['Open']):
@@ -205,16 +233,27 @@ def scan_one_stock(symbol, config):
                                    config["quiet_period_days"],
                                    config["quiet_threshold"]):
                 continue
+
+            market       = get_market(symbol)
+            currency     = MARKET_CONFIG[market]["currency"]
+            liq_th       = MARKET_CONFIG[market]["threshold"]
+            trading_val  = float(row['Close']) * float(row['Volume'])
+
             found.append({
-                "Symbol":      symbol.replace(".BK", ""),
-                "Full_Symbol": symbol,
-                "Date":        dt.strftime("%Y-%m-%d"),
-                "Open":        round(float(row['Open']),  2),
-                "Close":       round(float(row['Close']), 2),
-                "Change_%":    round(float(row['Chg_OC']) * 100, 2),
-                "Volume":      int(row['Volume']),
-                "Vol_MA20":    int(row['Vol_MA']) if not pd.isna(row['Vol_MA']) else 0,
-                "Vol_Ratio_x": round(float(row['Vol_Ratio']), 1),
+                "Symbol":         symbol.replace(".BK", "").replace(".HK", ""),
+                "Full_Symbol":    symbol,
+                "Market":         market,
+                "Date":           dt.strftime("%Y-%m-%d"),
+                "Open":           round(float(row['Open']),  2),
+                "Close":          round(float(row['Close']), 2),
+                "Change_%":       round(float(row['Chg_OC']) * 100, 2),
+                "Volume":         int(row['Volume']),
+                "Vol_MA20":       int(row['Vol_MA']) if not pd.isna(row['Vol_MA']) else 0,
+                "Vol_Ratio_x":    round(float(row['Vol_Ratio']), 1),
+                "Trading_Value":  trading_val,
+                "Currency":       currency,
+                "Liq_Threshold":  liq_th,
+                "Below_Liq":      trading_val < liq_th,
             })
     except:
         pass
@@ -387,19 +426,37 @@ if "signals" in st.session_state and st.session_state["signals"] is not None:
     if not signals:
         st.info("ℹ️ ไม่พบสัญญาณในช่วงที่กำหนด ลองเพิ่ม lookback หรือลด threshold ดูครับ")
     else:
-        df_result = pd.DataFrame(signals).sort_values("Date", ascending=False).reset_index(drop=True)
+        # เรียงตาม Trading Value จากมากไปน้อยเป็นค่าเริ่มต้น
+        # (หุ้นสภาพคล่องสูง/มีมูลค่าเทรดจริงเยอะ ขึ้นก่อน — กันไม่ให้หุ้น
+        # เกรดต่ำที่ปั่นง่ายไปโผล่ปนอยู่ด้านบนของผลลัพธ์)
+        df_result = pd.DataFrame(signals).sort_values("Trading_Value", ascending=False).reset_index(drop=True)
         df_result.index = df_result.index + 1
 
         # --- ตารางผลลัพธ์ ---
         st.markdown("### 📋 ผลการสแกน")
+        st.caption(
+            "🔴 แถวพื้นสีแดงอ่อน = Trading Value ต่ำกว่าเกณฑ์สภาพคล่องแนะนำของตลาดนั้นๆ "
+            "(TH < 50M บาท · HK < 20M HKD · US < 5M USD) — ไม่ได้ตัดออก แค่เตือนให้ระวังความเสี่ยงถูกปั่นราคา"
+        )
 
-        display_df = df_result[["Symbol","Date","Open","Close","Change_%","Vol_Ratio_x"]].copy()
-        display_df.columns = ["หุ้น","วันที่","Open","Close","บวก (%)","Vol Ratio"]
+        display_df = df_result[["Symbol","Market","Date","Open","Close","Change_%","Vol_Ratio_x"]].copy()
+        display_df["Trading Value"] = [
+            fmt_trading_value(v, c) for v, c in zip(df_result["Trading_Value"], df_result["Currency"])
+        ]
+        display_df.columns = ["หุ้น","ตลาด","วันที่","Open","Close","บวก (%)","Vol Ratio","Trading Value"]
         display_df["บวก (%)"] = display_df["บวก (%)"].apply(lambda x: f"+{x:.1f}%")
         display_df["Vol Ratio"] = display_df["Vol Ratio"].apply(lambda x: f"{x:.1f}x")
 
+        below_liq = df_result["Below_Liq"].values  # ใช้ align แถวกับ display_df
+
+        def highlight_low_liquidity(row):
+            idx = display_df.index.get_loc(row.name)
+            if below_liq[idx]:
+                return ["background-color: #4a1414; color: #ff9999"] * len(row)
+            return [""] * len(row)
+
         st.dataframe(
-            display_df,
+            display_df.style.apply(highlight_low_liquidity, axis=1),
             use_container_width=True,
             height=min(400, 60 + len(display_df) * 38),
         )
