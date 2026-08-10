@@ -180,7 +180,11 @@ def scan_one_stock(symbol, config):
 
         df = df.copy()
         vm = config["volume_ma_period"]
-        df['Vol_MA']   = df['Volume'].rolling(vm).mean()
+        # แก้ไข: shift(1) ก่อน rolling เพื่อให้ Vol_MA คิดจาก "vm วันก่อนหน้า"
+        # เท่านั้น ไม่รวม volume ของวันที่เกิดสัญญาณ (กันไม่ให้ spike ของ
+        # วันนั้นไปดันค่าเฉลี่ยของตัวเองให้สูงเทียม เหมือนหลักการ volume[1]
+        # ในโค้ด Pine Script)
+        df['Vol_MA']   = df['Volume'].shift(1).rolling(vm).mean()
         df['Chg_OC']   = (df['Close'] - df['Open']) / df['Open']
         df['Vol_Ratio'] = df['Volume'] / df['Vol_MA']
 
@@ -238,7 +242,8 @@ def plot_chart(df, symbol, signal_date, vol_ma_period=20):
         return None
 
     df = df.copy()
-    df['Vol_MA'] = df['Volume'].rolling(vol_ma_period).mean()
+    # แก้ไขให้ตรงกับตรรกะเดียวกับตอนสแกน: ไม่รวมวันปัจจุบันในค่าเฉลี่ย
+    df['Vol_MA'] = df['Volume'].shift(1).rolling(vol_ma_period).mean()
 
     sig_dt = pd.Timestamp(signal_date)
 
